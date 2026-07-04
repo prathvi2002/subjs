@@ -44,6 +44,16 @@ func New(opts *Options) *SubJS {
 		transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return dialer.Dial(network, addr)
 		}
+	} else if opts.Proxy != "" {
+		proxyURL, err := url.Parse(opts.Proxy)
+		if err != nil {
+			log.Fatalf("Invalid -proxy URL %q: %s", opts.Proxy, err)
+		}
+		// TLSClientConfig above already sets InsecureSkipVerify, which
+		// applies to the TLS handshake for HTTPS targets tunneled through
+		// this proxy (e.g. Burp/mitmproxy with a self-signed CA) as well
+		// as direct connections, so no extra cert handling is needed here.
+		transport.Proxy = http.ProxyURL(proxyURL)
 	}
 
 	c := &http.Client{
@@ -51,6 +61,20 @@ func New(opts *Options) *SubJS {
 		Transport: transport,
 	}
 	return &SubJS{client: c, opts: opts}
+}
+
+// applyHeaders sets the User-Agent and any custom -H headers on a request.
+func (s *SubJS) applyHeaders(req *http.Request) {
+	if s.opts.UserAgent != "" {
+		req.Header.Set("User-Agent", s.opts.UserAgent)
+	}
+	for _, h := range s.opts.Headers {
+		parts := strings.SplitN(h, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		req.Header.Set(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]))
+	}
 }
 
 func (s *SubJS) Run() error {
@@ -119,9 +143,7 @@ func (s *SubJS) fetch(urls <-chan string, results chan string) {
 		if err != nil {
 			continue
 		}
-		if s.opts.UserAgent != "" {
-			req.Header.Add("User-Agent", s.opts.UserAgent)
-		}
+		s.applyHeaders(req)
 		resp, err := s.client.Do(req)
 		if err != nil {
 			continue
@@ -223,10 +245,18 @@ func isJSResponse(u string, contentType string) bool {
 // fully-qualified cross-domain URLs, and relative path string literals.
 // Query strings and fragments after ".js" are captured too (e.g.
 // "main.js?v=123"), not just the bare filename.
+// jsRefRe picks up JS-to-JS references not covered by the Next.js/webpack
+// manifest patterns in ProcessWebpackFile: dynamic import()/require() calls,
+// fully-qualified cross-domain URLs, relative path string literals, and
+// bare filenames with no path prefix at all (e.g. a module map like
+// {kids:"kids.js"} that loads siblings of the current script by name).
+// Matches .js, .mjs, and .cjs. Query strings and fragments after the
+// extension are captured too (e.g. "main.js?v=123").
 var jsRefRe = regexp.MustCompile(
-	`(?:import|require)\(\s*["']([^"'()]+\.js(?:[?#][^"']*)?)["']\s*\)` +
-		`|["'](https?://[^"'\s]+\.js(?:[?#][^"']*)?)["']` +
-		`|["'](\.{0,2}/[^"'\s]+\.js(?:[?#][^"']*)?)["']`,
+	`(?:import|require)\(\s*["']([^"'()]+\.(?:js|mjs|cjs)(?:[?#][^"']*)?)["']\s*\)` +
+		`|["'](https?://[^"'\s]+\.(?:js|mjs|cjs)(?:[?#][^"']*)?)["']` +
+		`|["'](\.{0,2}/[^"'\s]+\.(?:js|mjs|cjs)(?:[?#][^"']*)?)["']` +
+		`|["']([A-Za-z0-9_.-]+\.(?:js|mjs|cjs)(?:[?#][^"']*)?)["']`,
 )
 
 // looksLikeWebpackRuntime does a cheap content-based check for whether a JS
@@ -272,9 +302,7 @@ func (s *SubJS) fetchAndScanJS(jsURL string, results chan string, processedURLs 
 	if err != nil {
 		return
 	}
-	if s.opts.UserAgent != "" {
-		req.Header.Add("User-Agent", s.opts.UserAgent)
-	}
+	s.applyHeaders(req)
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return
@@ -318,6 +346,9 @@ func scanForJSReferences(baseURL *url.URL, content string, results chan string, 
 		}
 		if js == "" {
 			js = m[3]
+		}
+		if js == "" {
+			js = m[4]
 		}
 		if js == "" {
 			continue
