@@ -70,3 +70,11 @@ echo "https://example.com/" | subjs -H "Cookie: session=abc123" -H "X-Api-Key: t
   won't be found.
 - Extensionless URLs not assigned via `.src=` (e.g. passed as a function
   argument instead) can be missed.
+- subjs does not recursively crawl every discovered JS file. For an HTML page URL, it fetches and scans the scripts linked from that page - but any further JS URLs found inside those scripts are reported, not fetched and scanned again.
+  - It's not quite "zero recursion", let us explain further:
+    - For a HTML page URL, it fetches the page, finds `<script src>` tags, then also
+    fetches and scans those linked `.js` files for further references (one hop
+    beyond the page itself).
+    - For a direct `.js` file input, it scans that single file's content and
+    reports what it finds, but does not fetch any discovered URLs and scan them
+    recursively.
