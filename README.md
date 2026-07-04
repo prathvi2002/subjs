@@ -1,8 +1,11 @@
+It is a modified version of [original subjs](https://github.com/lc/subjs) that can also extract JS URLs from within JS files themselves, plus several other improvements.
+Original subjs works with subdomains too, BUT THIS MODIFIED VERSION IS NOT MADE IN MIND TO WORK WITH SUBDOMAINS!
+
 # subjs
 
-Fetches URLs, extracts every JavaScript file reference it can find — script
+Fetches URLs, extracts every JavaScript file reference it can find - script
 tags, inline script content, webpack/Next.js chunk manifests, dynamic
-`import()`/`require()` calls, and bare module references — and recursively
+`import()`/`require()` calls, and bare module references , and recursively
 scans discovered `.js`/`.mjs`/`.cjs` files for further references.
 
 ## Build
@@ -31,9 +34,9 @@ or a direct `.js` URL (scans the file body directly).
 | `-t` | HTTP client timeout, in seconds | `30` |
 | `-ua` | User-Agent to send | realistic Chrome UA |
 | `-H` | Custom header `"Key: Value"`, repeatable | none |
-| `-proxy` | HTTP/HTTPS proxy URL to route requests through (e.g. `http://127.0.0.1:8080`) — certificate verification is skipped, so intercepting proxies like Burp work out of the box | none |
+| `-proxy` | HTTP/HTTPS proxy URL to route requests through (e.g. `http://127.0.0.1:8080`) , certificate verification is skipped, so intercepting proxies like Burp work out of the box | none |
 | `-tor` | Route requests through the local Tor SOCKS5 proxy at `127.0.0.1:9050`. Takes priority over `-proxy` if both are set | `false` |
-| `-version` | Print version and exit | — |
+| `-version` | Print version and exit | , |
 
 ## Examples
 
@@ -62,7 +65,7 @@ echo "https://example.com/" | subjs -H "Cookie: session=abc123" -H "X-Api-Key: t
 
 ## Known limitations
 
-- Static analysis only — no JS execution, so SPA routes/chunks only loaded
+- Static analysis only , no JS execution, so SPA routes/chunks only loaded
   conditionally at runtime (feature flags, auth state, user interaction)
   won't be found.
 - Extensionless URLs not assigned via `.src=` (e.g. passed as a function
