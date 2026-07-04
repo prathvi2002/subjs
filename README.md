@@ -1,53 +1,69 @@
 # subjs
-[![License](https://img.shields.io/badge/license-MIT-_red.svg)](https://opensource.org/licenses/MIT)
-[![Go ReportCard](https://goreportcard.com/badge/github.com/lc/gau)](https://goreportcard.com/report/github.com/lc/subjs)
 
-subjs fetches javascript files from a list of URLS or subdomains. Analyzing javascript files can help you find undocumented endpoints, secrets, and more.
+Fetches URLs, extracts every JavaScript file reference it can find — script
+tags, inline script content, webpack/Next.js chunk manifests, dynamic
+`import()`/`require()` calls, and bare module references — and recursively
+scans discovered `.js`/`.mjs`/`.cjs` files for further references.
 
-It's recommended to pair this with [gau](https://github.com/lc/gau) and then [https://github.com/GerbenJavado/LinkFinder](https://github.com/GerbenJavado/LinkFinder)
+## Build
 
-# Resources
-- [Usage](#usage)
-- [Installation](#installation)
-
-## Usage:
-Examples:
 ```bash
-$ cat urls.txt | subjs 
+go build -o subjs .
+```
+
+## Usage
+
+```bash
+$ cat urls.txt | subjs
 $ subjs -i urls.txt
 $ cat hosts.txt | gau | subjs
 ```
 
-To display the help for the tool use the `-h` flag:
+Works with either a page URL (crawls HTML, script tags, and inline scripts)
+or a direct `.js` URL (scans the file body directly).
+
+## Flags
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-i` | Input file containing URLs (reads stdin if omitted) | stdin |
+| `-c` | Number of concurrent workers | `10` |
+| `-t` | HTTP client timeout, in seconds | `30` |
+| `-ua` | User-Agent to send | realistic Chrome UA |
+| `-H` | Custom header `"Key: Value"`, repeatable | none |
+| `-proxy` | HTTP/HTTPS proxy URL to route requests through (e.g. `http://127.0.0.1:8080`) — certificate verification is skipped, so intercepting proxies like Burp work out of the box | none |
+| `-tor` | Route requests through the local Tor SOCKS5 proxy at `127.0.0.1:9050`. Takes priority over `-proxy` if both are set | `false` |
+| `-version` | Print version and exit | — |
+
+## Examples
 
 ```bash
-$ subjs -h
+# basic crawl
+echo "https://example.com/" | subjs
+
+# through Burp
+echo "https://example.com/" | subjs -proxy http://127.0.0.1:8080
+
+# through Tor, with a longer timeout since Tor is slow
+echo "https://example.com/" | subjs -tor -t 60
+
+# custom headers (auth, session cookies, etc.)
+echo "https://example.com/" | subjs -H "Cookie: session=abc123" -H "X-Api-Key: test"
 ```
 
-| Flag | Description | Example |
-|------|-------------|---------|
-| `-c` | Number of concurrent workers | `subjs -c 40` |
-| `-i` | Input file containing URLS | `subjs -i urls.txt` |
-| `-t` | Timeout (in seconds) for http client (default 15) | `subjs -t 20` |
-| `-ua` | User-Agent to send in requests | `subjs -ua "Chrome..."` |
-| `-version` | Show version number | `subjs -version"` |
+## What it catches
 
+- `<script src="...">` and `<div data-script-src="...">`
+- Inline `<script>` tag content (string literals, dynamic imports)
+- Absolute cross-domain URLs, protocol-relative URLs, and query strings
+- Bare filenames with no path prefix (e.g. sibling-module references)
+- Extensionless script URLs assigned via `.src =` (e.g. `js.stripe.com/v3`)
+- Webpack/Next.js chunk manifests (`_buildManifest`, `a.u=e=>...` patterns)
 
-## Installation
-### From Source:
+## Known limitations
 
-```
-$ GO111MODULE=on go get -u -v github.com/lc/subjs@latest
-```
-
-### From Binary
-You can download the pre-built [binaries](https://github.com/lc/subjs/releases/) from the releases page and then move them into your $PATH.
-
-```
-$ tar xvf subjs_1.0.0_linux_amd64.tar.gz
-$ mv subjs /usr/bin/subjs
-```
-
-## Useful?
-
-<a href="http://buymeacoff.ee/cdl" target="_blank"><img src="https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png" alt="Buy Me A Coffee" style="height: 41px !important;width: 174px !important;box-shadow: 0px 3px 2px 0px rgba(190, 190, 190, 0.5) !important;-webkit-box-shadow: 0px 3px 2px 0px rgba(190, 190, 190, 0.5) !important;" ></a>
+- Static analysis only — no JS execution, so SPA routes/chunks only loaded
+  conditionally at runtime (feature flags, auth state, user interaction)
+  won't be found.
+- Extensionless URLs not assigned via `.src=` (e.g. passed as a function
+  argument instead) can be missed.
