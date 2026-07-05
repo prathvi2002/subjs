@@ -1,0 +1,162 @@
+It is a modified version of [original subjs](https://github.com/lc/subjs) that can also extract JS URLs from within JS files themselves, plus several other improvements.
+Original subjs works with subdomains too, BUT THIS MODIFIED VERSION IS NOT MADE IN MIND TO WORK WITH SUBDOMAINS!
+
+# subjs
+
+Fetches URLs, extracts every JavaScript file reference it can find - script
+tags, inline script content, webpack/Next.js chunk manifests, dynamic
+`import()`/`require()` calls, and bare module references , and recursively
+scans discovered `.js`/`.mjs`/`.cjs` files for further references.
+
+## Build
+
+```bash
+go build -o subjs .
+```
+
+## Usage
+
+```bash
+$ cat urls.txt | subjs
+$ subjs -i urls.txt
+$ cat hosts.txt | gau | subjs
+```
+
+Works with either a page URL (crawls HTML, script tags, and inline scripts)
+or a direct `.js` URL (scans the file body directly).
+
+## Flags
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-i` | Input file containing URLs (reads stdin if omitted) | stdin |
+| `-c` | Number of concurrent workers | `10` |
+| `-t` | HTTP client timeout, in seconds | `15` |
+| `-ua` | User-Agent to send | realistic Chrome UA |
+| `-H` | Custom header `"Key: Value"`, repeatable | none |
+| `-proxy` | HTTP/HTTPS proxy URL to route requests through (e.g. `http://127.0.0.1:8080`) , certificate verification is skipped, so intercepting proxies like Burp work out of the box | none |
+| `-tor` | Route requests through the local Tor SOCKS5 proxy at `127.0.0.1:9050`. Takes priority over `-proxy` if both are set (a notice is printed to stderr if both are set) | `false` |
+| `-max-size` | Maximum response body size to read, in MB. `0` = unlimited | `50` |
+| `-depth` | Further hops beyond the directly-linked scripts (which are always fetched). `0` = only report what's referenced inside those, don't fetch it | `1` |
+| `-scope` | Restrict crawling/reporting to a domain scope. Repeatable, or comma-separated within one flag. Only applies to URLs discovered while crawling - input URLs (stdin/`-i`) are always fetched regardless. See [Scope](#scope) below | none (unrestricted) |
+| `-debug` | Print request errors and non-2xx statuses to stderr (silent otherwise) | `false` |
+| `-version` | Print version and exit | , |
+
+## Scope
+
+`-scope` takes one or more entries (repeat the flag, or comma-separate within a single value) and restricts which discovered hosts get crawled/reported.
+
+> **Note:** this only applies to URLs *discovered while crawling* (script tags, webpack chunks, JS-in-JS references, etc). Whatever you pipe in on stdin/`-i` is always fetched regardless of `-scope` - scope only restrains what the tool goes on to chase from there.
+
+Three kinds of entry are supported, picked automatically by shape:
+
+| Entry | Matches |
+|-------|---------|
+| `example.com` | that exact host only |
+| `*.example.com` | that host, plus any subdomain of it |
+| `google` (no dot) | any host containing `google` anywhere, in either the domain or subdomain part - partial matches included (e.g. `google.com`, `mail.google.com`, `evilgoogle.net`) |
+
+```bash
+# only crawl example.com itself
+echo "https://example.com/" | subjs -scope example.com
+
+# example.com and all its subdomains
+echo "https://example.com/" | subjs -scope "*.example.com"
+
+# multiple domains, mixed with a wildcard, in one flag
+echo "https://example.com/" | subjs -scope "example.com,*.internal.example.com"
+
+# keyword match: anything with "acme" anywhere in the hostname
+echo "https://example.com/" | subjs -scope acme
+```
+
+## Examples
+
+```bash
+# basic crawl
+echo "https://example.com/" | subjs
+
+# through Burp
+echo "https://example.com/" | subjs -proxy http://127.0.0.1:8080
+
+# through Tor, with a longer timeout since Tor is slow
+echo "https://example.com/" | subjs -tor -t 60
+
+# custom headers (auth, session cookies, etc.)
+echo "https://example.com/" | subjs -H "Cookie: session=abc123" -H "X-Api-Key: test"
+
+# cap response size and dig deeper into chunked bundles
+echo "https://example.com/" | subjs -max-size 20 -depth 4
+
+# scoped to a target and its subdomains, verbose
+echo "https://example.com/" | subjs -scope "*.example.com" -debug
+```
+
+## Content-Type handling: input URLs vs. discovered URLs
+
+These are treated differently on purpose:
+
+- **URLs you feed in** (stdin / `-i`) are fetched and handled based on
+  whatever they actually turn out to be - JS (scanned directly for further
+  references) or HTML (parsed for `<script>`/`<link>`/etc.). No content type
+  is required or assumed; give it a page URL or a raw `.js` URL and either
+  works.
+- **URLs discovered while crawling** (a `<script src>`, a webpack chunk, a
+  JS-in-JS reference, an `importScripts()` argument, etc.) are always
+  *reported* regardless of what they turn out to be, but are only
+  **recursively fetched and scanned as JS** if the response's `Content-Type`
+  header (or, failing that, the URL's extension) actually looks like
+  JavaScript. This matters because a regex match inside a JS file
+  occasionally isn't really a script reference at all - e.g. an analytics
+  beacon or tracking-pixel URL that happens to match the `.src=` pattern -
+  and such a URL can come back as `image/gif` or similar. Rather than
+  regex-scanning that binary/unrelated content as if it were JS source,
+  the recursive scan is simply skipped (visible via `-debug`); the URL
+  itself is still printed in the output.
+
+## Depth
+
+`-depth` controls how many hops of *fetching* happen beyond the page's directly-linked scripts. Reporting is not gated by depth - a discovered URL is always printed the moment it's found, at any depth. `-depth` only decides whether that URL is itself fetched to look for further references inside it.
+
+The page's directly-linked `<script src>`/`<link>` targets are always fetched and scanned, regardless of `-depth` (that part isn't optional - it's the tool's baseline behavior). `-depth` counts hops from there:
+
+| `-depth` | What gets fetched | What gets reported |
+|----------|--------------------|---------------------|
+| `0` | The page + its directly-linked scripts only | Everything above, plus every reference found *inside* those scripts (not fetched) |
+| `1` (default) | The page + its directly-linked scripts + everything referenced inside them | All of the above, plus every reference found inside *that* next layer (not fetched) |
+| `2` | One hop further than `1` | One layer further than `1` |
+| `N` | `N` hops of fetching beyond the directly-linked scripts | `N+1` layers of references reported |
+
+Worked example: `page.html` links `main.js`, which references `stripe.js`, which references `connect.js`.
+
+- `-depth 0`: `main.js` is fetched and scanned. `stripe.js` is **reported but not fetched** - so `connect.js` is never discovered at all, since nothing scanned `stripe.js`'s contents.
+- `-depth 1` (default): `main.js` and `stripe.js` are both fetched and scanned. `connect.js` is **reported but not fetched**.
+- `-depth 2`: `main.js`, `stripe.js`, and `connect.js` are all fetched and scanned, and so on for whatever `connect.js` references.
+
+A shared dedup map across all workers and hops means a URL is only ever fetched once regardless of how many places reference it, which is also what keeps recursion bounded even if two files reference each other.
+
+## What it catches
+
+- `<script src="...">` and `<div data-script-src="...">`
+- Inline `<script>` tag content (string literals, dynamic imports)
+- Absolute cross-domain URLs, protocol-relative URLs, and query strings
+- Bare filenames with no path prefix (e.g. sibling-module references)
+- Extensionless script URLs assigned via `.src =` (e.g. `js.stripe.com/v3`)
+- Webpack/Next.js chunk manifests (`_buildManifest`, `a.u=e=>...` patterns)
+
+## Known limitations
+
+- Static analysis only , no JS execution, so SPA routes/chunks only loaded
+  conditionally at runtime (feature flags, auth state, user interaction)
+  won't be found.
+- Extensionless URLs not assigned via `.src=` (e.g. passed as a function
+  argument instead) can be missed.
+- Recursion is bounded by `-depth` (default `1`), not unlimited - see
+  [Depth](#depth) above for exactly what each value fetches vs. reports.
+  For a direct `.js` file input, the same budget applies starting from that
+  file. A shared dedup map across all workers and hops means a URL is only
+  ever fetched once regardless of how many places reference it, which is
+  also what keeps recursion bounded even if two files reference each other.
+- Response bodies are capped at `-max-size` (default `50` MB) to avoid
+  buffering an arbitrarily large response into memory; anything beyond that
+  is truncated before scanning.
